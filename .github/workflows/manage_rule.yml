@@ -1,149 +1,123 @@
-name: Daily Update ad.txt
+name: Update Domain List
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天 UTC 凌晨 0 点运行
-  workflow_dispatch:    # 支持手动触发
-
-permissions:
-  contents: write       # 允许推送更改
+    # 每天中国时间 4:00 AM (UTC+8) = UTC 20:00 (前一天)
+    - cron: '0 20 * * *'
+  workflow_dispatch:
 
 jobs:
-  update-ad:
+  update-domain-list:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Create rules directory
-        run: mkdir -p rules
-
-      - name: Download anti-ad-easylist.txt
-        run: curl -fsSL https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/master/anti-ad-easylist.txt -o anti-ad-easylist.txt
-
-      - name: Filter rules and generate ad.txt
+      - name: Download source file
         run: |
-          # 处理规则文件，保留非纯域名格式的规则
-          # 1. 保留所有白名单规则（以 @@ 开头）
-          # 2. 保留所有含有通配符 * 的规则
-          # 3. 保留所有含有路径 / 的规则
-          # 4. 保留所有包含 $ 选项的规则
-          # 5. 保留所有包含其他特殊字符的规则
-          # 6. 删除纯域名格式（如 ||example.com^ 或 example.com）
-          # 7. 删除注释行（以 ! 开头）
-          
-          # 定义过滤函数
-          process_rules() {
-            local input_file="$1"
-            local output_file="$2"
-            
-            # 清空输出文件
-            > "$output_file"
-            
-            # 逐行处理
-            while IFS= read -r line || [[ -n "$line" ]]; do
-              # 跳过空行（不输出空行）
-              if [[ -z "$line" ]]; then
-                continue
-              fi
-              
-              # 删除注释行（以 ! 开头，不输出）
-              if [[ "$line" =~ ^[[:space:]]*! ]]; then
-                continue
-              fi
-              
-              # 保留白名单规则（以 @@ 开头）
-              if [[ "$line" =~ ^@@ ]]; then
-                echo "$line" >> "$output_file"
-                continue
-              fi
-              
-              # 保留包含通配符 * 的规则
-              if [[ "$line" == *"*"* ]]; then
-                echo "$line" >> "$output_file"
-                continue
-              fi
-              
-              # 保留包含路径 / 的规则
-              if [[ "$line" == *"/"* ]]; then
-                echo "$line" >> "$output_file"
-                continue
-              fi
-              
-              # 保留包含 $ 选项的规则
-              if [[ "$line" == *"\$"* ]]; then
-                echo "$line" >> "$output_file"
-                continue
-              fi
-              
-              # 保留包含其他特殊字符的规则
-              # 如 ?, =, &, :, %, # 等
-              if [[ "$line" =~ [\?\=\&\:\%\#] ]]; then
-                echo "$line" >> "$output_file"
-                continue
-              fi
-              
-              # 删除纯域名格式的规则
-              # 这些规则通常匹配以下模式：
-              # 1. ||example.com^
-              # 2. ||example.com
-              # 3. example.com
-              # 4. 0.0.0.0 example.com
-              
-              # 检查是否是纯域名格式
-              local is_pure_domain=false
-              
-              # 模式 1: ||example.com^
-              if [[ "$line" =~ ^\|\|[a-zA-Z0-9._-]+\^$ ]]; then
-                is_pure_domain=true
-              fi
-              
-              # 模式 2: ||example.com (没有结尾的 ^)
-              if [[ "$line" =~ ^\|\|[a-zA-Z0-9._-]+$ ]]; then
-                is_pure_domain=true
-              fi
-              
-              # 模式 3: 纯域名 (可能前面有空格)
-              if [[ "$line" =~ ^[[:space:]]*[a-zA-Z0-9._-]+[[:space:]]*$ ]]; then
-                # 检查是否包含点号（确保是域名）
-                if [[ "$line" =~ \. ]]; then
-                  is_pure_domain=true
-                fi
-              fi
-              
-              # 模式 4: 0.0.0.0 example.com 格式
-              if [[ "$line" =~ ^[0-9.]+\s+[a-zA-Z0-9._-]+$ ]]; then
-                is_pure_domain=true
-              fi
-              
-              # 如果不是纯域名格式，则保留
-              if [[ "$is_pure_domain" == "false" ]]; then
-                echo "$line" >> "$output_file"
-              fi
-            done < "$input_file"
-          }
-          
-          # 执行处理（输出到 rules/ad.txt）
-          process_rules "anti-ad-easylist.txt" "rules/ad.txt"
-          
-          # 统计信息（仅用于日志）
-          echo "处理完成！"
-          echo "原始文件行数: $(wc -l < anti-ad-easylist.txt)"
-          echo "处理后文件行数: $(wc -l < rules/ad.txt)"
-          echo "删除的规则数量: $(( $(wc -l < anti-ad-easylist.txt) - $(wc -l < rules/ad.txt) ))"
-          
-          # 显示处理后的前20行示例（用于调试日志）
-          echo "处理后的前20行示例:"
-          head -20 rules/ad.txt
+          curl -L -o white_domain_list.php \
+            "https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/refs/heads/adlist-maker/scripts/lib/white_domain_list.php"
 
-      - name: Commit and push if changed
+      - name: Extract and process domains
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add rules/ad.txt
-          if git diff --staged --quiet; then
-            echo "No changes detected, nothing to commit."
+          python3 << 'EOF'
+          import re
+          import sys
+          
+          try:
+              # 读取 PHP 文件
+              with open('white_domain_list.php', 'r', encoding='utf-8') as f:
+                  content = f.read()
+              
+              print("📄 已加载 PHP 文件")
+              
+              # 提取所有域名
+              # 匹配模式: "domain" => value, 其中 value 是 -1, 0, 1, 或 2
+              domains = []
+              comments = []
+              
+              # 使用正则表达式提取带引号的域名
+              # 匹配: "xxxxx" => 数字 或 // 注释
+              pattern = r'"([^"]+)"\s*=>\s*(-?\d+)\s*,?\s*(?://(.*))?'
+              matches = re.findall(pattern, content)
+              
+              total = len(matches)
+              included = 0
+              excluded = 0
+              
+              for domain, value, comment in matches:
+                  val = int(value)
+                  
+                  # 只保留 value 为 0 或 1 的域名 (排除 -1 的失效规则)
+                  if val >= 0:
+                      domains.append(domain)
+                      included += 1
+                      if comment:
+                          comments.append(f"{domain} # {comment.strip()}")
+                  else:
+                      excluded += 1
+              
+              # 移除重复项并排序
+              domains = sorted(set(domains))
+              
+              # 写入输出文件
+              with open('domains.txt', 'w', encoding='utf-8') as f:
+                  for domain in domains:
+                      f.write(domain + '\n')
+              
+              # 输出统计信息
+              print(f"\n📊 处理统计:")
+              print(f"  • 总规则数: {total}")
+              print(f"  • 包含域名: {included}")
+              print(f"  • 排除域名 (-1): {excluded}")
+              print(f"  • 去重后: {len(domains)}")
+              print(f"\n✓ 成功提取 {len(domains)} 个有效域名")
+              
+          except FileNotFoundError:
+              print("❌ 错误: 找不到 white_domain_list.php 文件", file=sys.stderr)
+              sys.exit(1)
+          except Exception as e:
+              print(f"❌ 处理出错: {str(e)}", file=sys.stderr)
+              sys.exit(1)
+          EOF
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: domain-list
+          path: domains.txt
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 检查是否有变化
+          if git diff --quiet domains.txt 2>/dev/null; then
+            echo "✓ 无新变化，跳过提交"
           else
-            git commit -m "Update ad.txt - $(date +'%Y-%m-%d')"
-            git push
+            git add domains.txt
+            git commit -m "chore: 更新域名白名单 - $(date +%Y-%m-%d)"
+            git push origin main
+            echo "✓ 已推送更新"
           fi
+        continue-on-error: true
+
+      - name: Create Release (if changes exist)
+        if: success()
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: "v$(date +%Y%m%d-%H%M%S)"
+          body: |
+            # 域名白名单更新
+            
+            更新时间: $(date '+%Y-%m-%d %H:%M:%S')
+            
+            域名总数: $(wc -l < domains.txt)
+          files: domains.txt
+          draft: false
+          prerelease: false
+        continue-on-error: true
