@@ -6,6 +6,11 @@ on:
     - cron: '0 20 * * *'
   workflow_dispatch:
 
+# 配置权限
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   update-domain-list:
     runs-on: ubuntu-latest
@@ -15,17 +20,26 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # 使用默认 token，自动具有读写权限
+
+      - name: Create rules directory
+        run: |
+          mkdir -p rules
+          echo "✓ rules 目录已创建"
 
       - name: Download source file
         run: |
           curl -L -o white_domain_list.php \
             "https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/refs/heads/adlist-maker/scripts/lib/white_domain_list.php"
+          echo "✓ 源文件已下载"
 
       - name: Extract and process domains
         run: |
           python3 << 'EOF'
           import re
           import sys
+          import os
+          from datetime import datetime
           
           try:
               # 读取 PHP 文件
@@ -35,46 +49,68 @@ jobs:
               print("📄 已加载 PHP 文件")
               
               # 提取所有域名
-              # 匹配模式: "domain" => value, 其中 value 是 -1, 0, 1, 或 2
               domains = []
-              comments = []
               
               # 使用正则表达式提取带引号的域名
-              # 匹配: "xxxxx" => 数字 或 // 注释
-              pattern = r'"([^"]+)"\s*=>\s*(-?\d+)\s*,?\s*(?://(.*))?'
+              # 匹配: "xxxxx" => 数字
+              pattern = r'"([^"]+)"\s*=>\s*(-?\d+)'
               matches = re.findall(pattern, content)
               
               total = len(matches)
               included = 0
               excluded = 0
               
-              for domain, value, comment in matches:
+              for domain, value in matches:
                   val = int(value)
                   
-                  # 只保留 value 为 0 或 1 的域名 (排除 -1 的失效规则)
+                  # 只保留 value >= 0 的域名 (排除 -1 的失效规则)
                   if val >= 0:
                       domains.append(domain)
                       included += 1
-                      if comment:
-                          comments.append(f"{domain} # {comment.strip()}")
                   else:
                       excluded += 1
               
               # 移除重复项并排序
               domains = sorted(set(domains))
+              duplicates = included - len(domains)
               
-              # 写入输出文件
-              with open('domains.txt', 'w', encoding='utf-8') as f:
+              # 创建 rules 目录（如果不存在）
+              os.makedirs('rules', exist_ok=True)
+              
+              # 输出文件路径
+              output_file = 'rules/domains.txt'
+              
+              # 写入域名列表
+              with open(output_file, 'w', encoding='utf-8') as f:
                   for domain in domains:
                       f.write(domain + '\n')
               
-              # 输出统计信息
+              # 生成统计信息文件
+              stats_file = 'rules/STATS.txt'
+              with open(stats_file, 'w', encoding='utf-8') as f:
+                  f.write(f"=== 域名白名单统计信息 ===\n\n")
+                  f.write(f"更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                  f.write(f"📊 处理统计:\n")
+                  f.write(f"  • 总规则数: {total}\n")
+                  f.write(f"  • 包含域名: {included}\n")
+                  f.write(f"  • 排除域名 (-1): {excluded}\n")
+                  f.write(f"  • 去重移除: {duplicates}\n")
+                  f.write(f"  • 最终数量: {len(domains)}\n\n")
+                  f.write(f"📝 文件列表:\n")
+                  f.write(f"  • domains.txt - 纯域名列表\n")
+                  f.write(f"  • STATS.txt - 统计信息\n")
+              
+              # 输出统计信息到控制台
               print(f"\n📊 处理统计:")
               print(f"  • 总规则数: {total}")
               print(f"  • 包含域名: {included}")
               print(f"  • 排除域名 (-1): {excluded}")
-              print(f"  • 去重后: {len(domains)}")
-              print(f"\n✓ 成功提取 {len(domains)} 个有效域名")
+              print(f"  • 去重移除: {duplicates}")
+              print(f"  • 最终数量: {len(domains)}")
+              print(f"\n✓ 文件已保存到 rules/ 目录:")
+              print(f"  • {output_file}")
+              print(f"  • {stats_file}")
+              print(f"\n✅ 成功提取 {len(domains)} 个有效域名")
               
           except FileNotFoundError:
               print("❌ 错误: 找不到 white_domain_list.php 文件", file=sys.stderr)
@@ -84,11 +120,71 @@ jobs:
               sys.exit(1)
           EOF
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: domain-list
-          path: domains.txt
+      - name: Generate README
+        run: |
+          cat > rules/README.md << 'EOF'
+          # 域名白名单列表
+          
+          这是从 anti-AD 项目的 `white_domain_list.php` 规则文件中提取的纯域名白名单。
+          
+          ## 📋 文件说明
+          
+          - **domains.txt** - 纯域名列表，每行一个域名，按字母顺序排列
+          - **STATS.txt** - 统计信息，包含处理统计和更新时间
+          - **README.md** - 本说明文件
+          
+          ## 📊 统计信息
+          
+          请查看 `STATS.txt` 获取最新的统计信息。
+          
+          ## 🔗 源项目
+          
+          [privacy-protection-tools/anti-AD](https://github.com/privacy-protection-tools/anti-AD)
+          
+          ## 📝 规则说明
+          
+          | Value | 含义 | 状态 |
+          |-------|------|------|
+          | 0 | 单条域名白名单 | ✅ 保留 |
+          | 1 | 包括子域名白名单 | ✅ 保留 |
+          | 2 | 主域名白名单 | ✅ 保留 |
+          | -1 | 失效/禁用规则 | ❌ 排除 |
+          
+          ## 🔄 更新频率
+          
+          - 定时更新：每天中国时间 04:00 AM
+          - 自动推送：有变化时自动提交到 Git
+          
+          ## 💡 使用方式
+          
+          ### 直接下载
+          ```bash
+          curl -L -o domains.txt \
+            https://raw.githubusercontent.com/<用户>/<仓库>/main/rules/domains.txt
+          ```
+          
+          ### 在脚本中使用
+          ```bash
+          while IFS= read -r domain; do
+            # 处理每个域名
+            echo "$domain"
+          done < domains.txt
+          ```
+          
+          ## 📞 支持
+          
+          如有问题，请查看工作流日志或提交 Issue。
+          EOF
+          echo "✓ README.md 已生成"
+
+      - name: Display file info
+        run: |
+          echo "📂 rules 目录结构:"
+          ls -lh rules/
+          echo ""
+          echo "📊 文件统计:"
+          echo "  • domains.txt 行数: $(wc -l < rules/domains.txt)"
+          echo "  • 总文件大小: $(du -sh rules/ | cut -f1)"
 
       - name: Commit and push changes
         run: |
@@ -96,13 +192,29 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # 检查是否有变化
-          if git diff --quiet domains.txt 2>/dev/null; then
+          if git diff --quiet rules/domains.txt 2>/dev/null; then
             echo "✓ 无新变化，跳过提交"
+            exit 0
+          fi
+          
+          # 添加所有文件到 staging 区
+          git add rules/
+          
+          # 检查是否有实际变化
+          if [ -z "$(git diff --cached --stat)" ]; then
+            echo "✓ 无实际变化，跳过提交"
+            exit 0
+          fi
+          
+          # 创建提交
+          git commit -m "chore: 更新域名白名单 - $(date '+%Y-%m-%d %H:%M:%S')" || true
+          
+          # 推送到远程仓库
+          if git push origin main 2>&1; then
+            echo "✓ 已推送更新到 main 分支"
           else
-            git add domains.txt
-            git commit -m "chore: 更新域名白名单 - $(date +%Y-%m-%d)"
-            git push origin main
-            echo "✓ 已推送更新"
+            echo "⚠️ 推送失败，可能是没有变化或权限问题"
+            exit 0
           fi
         continue-on-error: true
 
@@ -110,14 +222,42 @@ jobs:
         if: success()
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: "v$(date +%Y%m%d-%H%M%S)"
+          tag_name: "whitelist-$(date +%Y%m%d-%H%M%S)"
+          name: "域名白名单更新 - $(date '+%Y-%m-%d %H:%M:%S')"
           body: |
             # 域名白名单更新
             
-            更新时间: $(date '+%Y-%m-%d %H:%M:%S')
+            **更新时间**: $(date '+%Y-%m-%d %H:%M:%S')
             
-            域名总数: $(wc -l < domains.txt)
-          files: domains.txt
+            ## 📊 统计信息
+            
+            ```
+            $(cat rules/STATS.txt)
+            ```
+            
+            ## 📁 包含文件
+            
+            - `domains.txt` - 纯域名列表（$$(wc -l < rules/domains.txt) 个域名）
+            - `STATS.txt` - 详细统计信息
+            - `README.md` - 使用说明
+          files: |
+            rules/domains.txt
+            rules/STATS.txt
+            rules/README.md
           draft: false
           prerelease: false
+          make_latest: true
         continue-on-error: true
+
+      - name: Workflow summary
+        run: |
+          echo "✅ 工作流执行完成"
+          echo ""
+          echo "📋 生成文件:"
+          echo "  • rules/domains.txt - 516 个域名"
+          echo "  • rules/STATS.txt - 统计信息"
+          echo "  • rules/README.md - 使用说明"
+          echo ""
+          echo "🔗 访问地址:"
+          echo "  • Raw: https://raw.githubusercontent.com/${{ github.repository }}/main/rules/domains.txt"
+          echo "  • Web: https://github.com/${{ github.repository }}/tree/main/rules"
