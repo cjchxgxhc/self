@@ -20,7 +20,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # 使用默认 token，自动具有读写权限
 
       - name: Create rules directory
         run: |
@@ -85,6 +84,8 @@ jobs:
                   for domain in domains:
                       f.write(domain + '\n')
               
+              print(f"✓ 域名列表已保存: {output_file}")
+              
               # 生成统计信息文件
               stats_file = 'rules/STATS.txt'
               with open(stats_file, 'w', encoding='utf-8') as f:
@@ -99,6 +100,9 @@ jobs:
                   f.write(f"📝 文件列表:\n")
                   f.write(f"  • domains.txt - 纯域名列表\n")
                   f.write(f"  • STATS.txt - 统计信息\n")
+                  f.write(f"  • README.md - 说明文档\n")
+              
+              print(f"✓ 统计信息已保存: {stats_file}")
               
               # 输出统计信息到控制台
               print(f"\n📊 处理统计:")
@@ -107,9 +111,6 @@ jobs:
               print(f"  • 排除域名 (-1): {excluded}")
               print(f"  • 去重移除: {duplicates}")
               print(f"  • 最终数量: {len(domains)}")
-              print(f"\n✓ 文件已保存到 rules/ 目录:")
-              print(f"  • {output_file}")
-              print(f"  • {stats_file}")
               print(f"\n✅ 成功提取 {len(domains)} 个有效域名")
               
           except FileNotFoundError:
@@ -191,73 +192,67 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 检查是否有变化
-          if git diff --quiet rules/domains.txt 2>/dev/null; then
-            echo "✓ 无新变化，跳过提交"
-            exit 0
+          echo "🔍 检查文件变化..."
+          
+          # 检查 rules 目录是否有文件
+          if [ ! -f "rules/domains.txt" ]; then
+            echo "❌ 错误: rules/domains.txt 不存在"
+            exit 1
           fi
           
-          # 添加所有文件到 staging 区
+          # 添加所有 rules 目录的文件到 staging 区
           git add rules/
           
-          # 检查是否有实际变化
-          if [ -z "$(git diff --cached --stat)" ]; then
-            echo "✓ 无实际变化，跳过提交"
+          # 检查是否有待提交的文件
+          if git diff --cached --quiet; then
+            echo "ℹ️  无新变化，跳过提交"
             exit 0
           fi
+          
+          # 显示即将提交的文件
+          echo "📝 待提交文件:"
+          git diff --cached --name-only | sed 's/^/  • /'
           
           # 创建提交
-          git commit -m "chore: 更新域名白名单 - $(date '+%Y-%m-%d %H:%M:%S')" || true
+          COMMIT_MSG="chore: 更新域名白名单 - $(date '+%Y-%m-%d %H:%M:%S')"
+          if ! git commit -m "$COMMIT_MSG"; then
+            echo "❌ 提交失败"
+            exit 1
+          fi
           
           # 推送到远程仓库
-          if git push origin main 2>&1; then
-            echo "✓ 已推送更新到 main 分支"
-          else
-            echo "⚠️ 推送失败，可能是没有变化或权限问题"
-            exit 0
+          echo "📤 推送到远程仓库..."
+          if ! git push origin main; then
+            echo "❌ 推送失败"
+            exit 1
           fi
-        continue-on-error: true
-
-      - name: Create Release (if changes exist)
-        if: success()
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: "whitelist-$(date +%Y%m%d-%H%M%S)"
-          name: "域名白名单更新 - $(date '+%Y-%m-%d %H:%M:%S')"
-          body: |
-            # 域名白名单更新
-            
-            **更新时间**: $(date '+%Y-%m-%d %H:%M:%S')
-            
-            ## 📊 统计信息
-            
-            ```
-            $(cat rules/STATS.txt)
-            ```
-            
-            ## 📁 包含文件
-            
-            - `domains.txt` - 纯域名列表（$$(wc -l < rules/domains.txt) 个域名）
-            - `STATS.txt` - 详细统计信息
-            - `README.md` - 使用说明
-          files: |
-            rules/domains.txt
-            rules/STATS.txt
-            rules/README.md
-          draft: false
-          prerelease: false
-          make_latest: true
-        continue-on-error: true
+          
+          echo "✅ 已推送更新到 main 分支"
+          echo ""
+          echo "📊 已提交的文件:"
+          git diff --name-only HEAD~1 HEAD | sed 's/^/  • /'
+        continue-on-error: false
 
       - name: Workflow summary
+        if: always()
         run: |
-          echo "✅ 工作流执行完成"
           echo ""
-          echo "📋 生成文件:"
-          echo "  • rules/domains.txt - 516 个域名"
-          echo "  • rules/STATS.txt - 统计信息"
-          echo "  • rules/README.md - 使用说明"
+          echo "✅ 工作流执行完成"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "📋 生成的文件:"
+          if [ -f "rules/domains.txt" ]; then
+            echo "  ✓ rules/domains.txt ($(wc -l < rules/domains.txt) 个域名)"
+          fi
+          if [ -f "rules/STATS.txt" ]; then
+            echo "  ✓ rules/STATS.txt"
+          fi
+          if [ -f "rules/README.md" ]; then
+            echo "  ✓ rules/README.md"
+          fi
           echo ""
           echo "🔗 访问地址:"
           echo "  • Raw: https://raw.githubusercontent.com/${{ github.repository }}/main/rules/domains.txt"
           echo "  • Web: https://github.com/${{ github.repository }}/tree/main/rules"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
