@@ -95,6 +95,7 @@ clientlog3.music.163.com
 cnnic.cn
 cnnic.net
 cnnic.net.cn
+cnt.mail.netbk.co.jp
 co.in
 code.sms.mob.com
 com.com
